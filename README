@@ -1,3 +1,8 @@
+UID2SID
+
+ Using Samba for Active Directory authentication one problem occurs when legacy domain user accounts attempt when the UID to SID mapping fails for Winbind during Samba drive share mapping. This script processes user accounts in a specified OU by testing the UID to SID mapping and makes every attempt to populate the necessary Active Directory POSIX account values. See below for the two usage options:
+
+
 Wizard example - Use this to test functionality first
 
 By utilizing the wizard functionality you can target specific accounts which may exhibit UID/GID to SID mapping errors during the authentication process.
