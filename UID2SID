@@ -1,0 +1,724 @@
+#!/usr/bin/perl
+
+#
+# simple POSIX account fix for non-posix compliant user
+# accounts in active directory or openldap directory
+#
+# jason.gerfen@gmail.com
+#
+# last revision: 08.26.2008
+#
+
+# grab our modules
+use Getopt::Long;
+use POSIX qw( strftime );
+use Data::Dumper;
+
+# temporary file storage directory
+my $dir = ".UID2SID";
+my $PATH = "/usr/bin";
+
+# some defaults if schema attributes are missing
+$uid = 100001;
+$gid = 513;
+$homedir = "/home/Authenticated Users";
+$shell = "/bin/false";
+
+# some globals
+my ( $domain,
+     $user,
+     $pass,
+     $ou,
+     $container,
+     $obj,
+     $date );
+
+# menu system data
+GetOptions( "domain=s" => \$domain,
+            "user=s" => \$user,
+            "pass=s" => \$pass,
+            "ou=s" => \$ou,
+            "obj=s" => \$obj,
+            "verbose" => \$verbose,
+            "help" => \$help);
+
+# initialize script sub-routines
+$date = &GetDate;
+if( ( defined( $domain ) ) && ( defined( $user ) ) && ( defined( $pass ) ) && ( defined( $ou ) ) && ( defined( $obj ) ) ) {
+    &MainSub( $domain, $user, $pass, $ou, $obj, $date );
+} elsif( defined( $help ) ) {
+    &ShowSyntax;
+} else {
+    &WizardWiz;
+}
+
+# get date
+sub GetDate
+{
+    return strftime( '%m.%d.%Y', localtime() );
+}
+
+# handle directory and temp files
+sub CreateDir
+{
+    if( -d $dir ) { return; }
+    my $dirc = "mkdir $dir";
+    `$dirc`;
+    return;
+}
+
+# Initialize command
+sub GetLDAPQuery( $domain, $user, $pass, $ou, $obj, $date )
+{
+    print "Searching for '$obj' in '$ou', please wait...\n";
+    my $cmd = "$PATH/ldapsearch -v -x -h $domain -D \"$user\" -w $pass -b \"$ou\" -s sub \"objectclass=$obj\"";
+    print "\tBIND DN: CN=$user,$ou\n";
+    print "\tBASE DN: $ou\n";
+    print "\tObject Class: $obj\n";
+    print "SEARCH RESULTS:\n";
+    my @results = `$cmd >> $dir/ldap-lookup-$date.log`;
+    if( defined( $verbose ) ) {
+	print "CMD: " . $cmd . "\n";
+    }
+    return @results;
+}
+
+# Initialize command
+sub GetLDAPQueryEasy( $domain, $user, $pass, $nameOne, $date )
+{
+    #break up domain
+    my @d = split(/\./, $domain);
+    my $ou = '';
+    for( my $i = 0; $i <= $#d; $i++ ) {
+	$ou .= "DC=" . $d[$i] . ",";
+    }
+    $ou = substr($ou,0,-1);
+    print "Searching for '$nameOne', please wait...\n";
+    my $cmd = "$PATH/ldapsearch -x -h $domain -D \"$user\" -w $pass -b \"$ou\" \"(sAMAccountName=$nameOne)\"";
+    print "SEARCH RESULTS:\n";
+    my @results = `$cmd >> $dir/ldap-lookup-$date.log`;
+    if( defined( $verbose ) ) {
+	print "CMD: " . $cmd . "\n";
+    }
+    return @results;
+}
+
+# Same search but limit to user
+sub GetLDAPQueryAttribs( $domain, $uname, $pass, $ou, $obj, $date, $tmpName )
+{
+    $domain = shift; $uname = shift; $pass = shift; $ou = shift; $obj = shift; $date = shift; $tmpName = shift;
+    my $cmd = "$PATH/ldapsearch -x -h $domain -D \"$uname\" -w $pass -b \"$ou\" \"(givenName=$tmpName)\" dn cn msSFUName msSFUHomeDirectory unixHomeDirectory uidNumber gidNumber loginShell sAMAccountName";
+    my @results = `$cmd >> $dir/ldap-modify-$date-$tmpName.log`;
+    if( defined( $verbose ) ) {
+	print $cmd . "\n";
+    }
+    return @results;
+}
+
+# Same search but limit to user through wizard
+sub GetLDAPQueryAttribsEasy( $domain, $uname, $pass, $nameOne, $ou, $obj, $date, $tmpName )
+{
+    $domain = shift; $uname = shift; $pass = shift; $nameOne = shift; $ou = shift; $obj = shift; $date = shift; $tmpName = shift;
+    my $cmd = "$PATH/ldapsearch -x -h $domain -D \"$uname\" -w $pass -b \"$ou\" \"(sAMAccountName=$nameOne)\" dn cn msSFUName msSFUHomeDirectory unixHomeDirectory uidNumber gidNumber loginShell sAMAccountName";
+    my @results = `$cmd >> $dir/ldap-modify-$date-$tmpName.log`;
+    if( defined( $verbose ) ) {
+	print $cmd . "\n";
+    }
+    return @results;
+}
+
+# Fix for CN, DN & distinguishedName attribs
+sub GetLDAPQueryCNDNAttribs( $domain, $uname, $pass, $ou, $obj, $date, $tmpName )
+{
+    $domain = shift; $uname = shift; $pass = shift; $ou = shift; $obj = shift; $date = shift; $tmpName = shift; my $a = '';
+    if( $tmpName =~ /^(\w+)\s(\w+)$/i ) { $a = $1 . $2; }
+    my $cmd = "$PATH/ldapsearch -x -h $domain -D \"$uname\" -w $pass -b \"$ou\" \"(cn=$tmpName)\" dn cn distinguishedName sAMAccountName >> $dir/ldap-modify-$date-" . $a . ".log";
+    my @results = `$cmd`;
+    if( defined( $verbose ) ) {
+	print "CMD: " . $cmd . "\n";
+    }
+    return @results;
+}
+
+# Fix for CN, DN & distinguishedName attribs
+sub GetLDAPQueryCNDNAttribsEasy( $domain, $uname, $pass, $nameOne, $ou, $obj, $date, $tmpName )
+{
+    $domain = shift; $uname = shift; $pass = shift; $nameOne = shift; $ou = shift; $obj = shift; $date = shift; $tmpName = shift; my $a = '';
+    if( $tmpName =~ /^(\w+)\s(\w+)$/i ) { $a = $1 . $2; }
+    my $cmd = "$PATH/ldapsearch -x -h $domain -D \"$uname\" -w $pass -b \"$ou\" \"(sAMAccountName=$nameOne)\" dn cn distinguishedName sAMAccountName >> $dir/ldap-modify-$date-" . $a . ".log";
+    my @results = `$cmd`;
+    if( defined( $verbose ) ) {
+	print "CMD: " . $cmd . "\n";
+    }
+    return @results;
+}
+
+# Same search but limit to user
+sub SetLDAPAttribs( $domain, $uname, $ou, $container,  $pass, $date, $file )
+{
+    my $domain = shift; my $uname = shift; my $ou = shift; my $container = shift; my $pass = shift; my $date = shift; my $file = shift;
+    #fix domain usernames
+    my @u = split(/\w+\\(\w+)/, $uname);
+    my $nuser = $u[1];
+    #break up domain
+    my @d = split(/\./, $domain);
+    my $ou1 = '';
+    for( my $i = 0; $i <= $#d; $i++ ) {
+	$ou1 .= "DC=" . $d[$i] . ",";
+    }
+    $ou1 = substr($ou1,0,-1);
+    if( $container eq "Users" ) { $container = "CN=".$container; } else { $container = "OU=".$container; }
+    my $cmd = "$PATH/ldapmodify -v -x -D \"CN=$nuser,$container,$ou1\" -w $pass -h $domain -f $dir/$file";
+    if( defined( $verbose ) ) {
+	print "CMD: " . $cmd . "\n";
+    }
+    `$cmd 2>> $dir/ldif-results-$date.log`;
+}
+
+# begin processing our ldif files
+sub ProcessLDIF( $domain, $uname, $pass, $date )
+{
+    my $domain = shift; my $uname = shift; my $pass = shift; my $date = shift; my $file = '';
+    opendir( DIR, $dir ) || die "ERROR: Could not open $dir for reading\n";
+    while( $file = readdir( DIR ) ) {
+	next if( -d $file );
+	if( $file =~ /\w+\.ldif$/i ) {
+	    print "\tLDIF Processing: $file\n";
+	    &SetLDAPAttribs( $domain, $uname, $ou, $container, $pass, $date, $file );
+	}
+    }
+    closedir( DIR );
+    return;
+}
+
+# parse our schema attributes
+sub ParseResultsLDAPAttribs( $username )
+{
+    my $username = shift;
+    if( $username =~ /^(\w+)\s(\w+)$/i ) { $username = $1 . $2; }
+    # open our temp file
+    open( RES, "$dir/ldap-modify-$date-$username.log" ) || die "ERROR: File could not be opened - $dir/ldap-modify-$date-$username.log\n";
+    flock( RES, 2 );
+    # initialize a new hash for results
+    my @res = ();
+    # begin looping over results
+    my( @lines ) = <RES>;
+    foreach my $line ( @lines ) {
+    	chomp( $line );
+    	my @userDataDetails = ();
+    	# get our schema attributes into an array 
+    	if( $line =~ /^(dn)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(cn)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(msSFUName)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(unixHomeDirectory)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(msSFUHomeDirectory)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(uidNumber)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(gidNumber)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(loginShell)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(sAMAccountName)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	push( @res, @userDataDetails );
+    }
+
+    # clean it up
+    close( RES );
+    flock( RES, 8 );
+    unlink( "$dir/ldap-modify-$date-$username.log" );
+
+    return \@res;
+}
+
+# parse our schema attributes version 2
+sub ParseResultsLDAPAttribsTwo( $username )
+{
+    my $username = shift;
+    if( $username =~ /^(\w+)\s(\w+)$/i ) { $username = $1 . $2; }
+    # open our temp file
+    open( RES, "$dir/ldap-fixdn-$date-$username.log" ) || die "ERROR: File could not be opened - $dir/ldap-modify-$date-$username.log\n";
+    flock( RES, 2 );
+    # initialize a new hash for results
+    my @res = ();
+    # begin looping over results
+    my( @lines ) = <RES>;
+    foreach my $line ( @lines ) {
+    	chomp( $line );
+    	my @userDataDetails = ();
+    	# get our schema attributes into an array 
+    	if( $line =~ /^(dn)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(cn)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(distinguishedName)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	if( $line =~ /^(sAMAccountName)\:\s(.*)$/i ) { push( @userDataDetails, $1 . "=" . $2 ); }
+    	push( @res, @userDataDetails );
+    }
+
+    # clean it up
+    close( RES );
+    flock( RES, 8 );
+    unlink( "$dir/ldap-fixdn-$date-$username.log" );
+
+    return \@res;
+}
+
+# create an ldif file from ldap results on schema attributes
+sub CreateLDIFOne 
+{
+    @array = shift; my $string = ''; my $name = ''; my $tmpName = '';
+    for my $x ( 0 .. $#array ) {
+    	for my $y ( 0 .. $#{ $array[$x] } ) {
+	     # fix for username shit
+	     if( $array[$x][$y] =~ /sAMAccountName=(.*)/i ) {
+     		$name = $1;
+	     }
+	    }
+    }
+
+    for my $x ( 0 .. $#array ) {
+    	for my $y ( 0 .. $#{ $array[$x] } ) {
+	     if( $array[$x][$y] ne '' ) {
+		     if( $array[$x][$y] =~ /dn=CN=(.*)(,CN=.*)/i ) {
+		      $string .= "dn: CN=$1$2\n"; my $tmpName = $1;
+		      $string .= "changetype: modify\n";
+		     }
+     		if( $array[$x][$y] =~ /msSFUName=(.*)/i ) {
+ 		     $string .= "replace: msSFUName\n";
+ 		     $string .= "msSFUName: $name\n-\n";
+    		 }
+		     if( $array[$x][$y] =~ /unixHomeDirectory=(.*)\/($tmpName)/i ) {
+		      $string .= "replace: unixHomeDirectory\n";
+		      $string .= "unixHomeDirectory: $1/$name\n-\n";
+		     }
+		     if( $array[$x][$y] =~ /msSFUHomeDirectory=(.*)\/($tmpName)/i ) {
+		      $string .= "replace: msSFUHomeDirectory\n";
+		      $string .= "msSFUHomeDirectory: $1/$name\n-\n";
+		     }
+		     if( $array[$x][$y] =~ /uidNumber=(.*)/i ) {
+			     $string .= "replace: uidNumber\n";
+			     $string .= "uidNumber: $1\n-\n";
+		     }
+		     if( $array[$x][$y] =~ /gidNumber=(.*)/i ) {
+		      $string .= "replace: gidNumber\n";
+		      $string .= "gidNumber: $1\n-\n";
+		     }
+		     if( $array[$x][$y] =~ /loginShell=(.*)/i ) {
+			     $string .= "replace: loginShell\n";
+			     $string .= "loginShell: $1\n";
+		     }
+	     }
+	    }
+    }
+
+
+    # one final check on string
+    $string = &CheckAttribs( $string, $name );
+    
+    # make sure its not empty before creating ldif file
+    if( ( $string ne "" ) && ( $name ne "" ) ) {
+    	open( RES, ">$dir/modify-zz-attribs-$date-$name.ldif" ) || die "ERROR: File could not be opened - $dir/modify-zz-attribs-$date-$name.ldif\n";
+	    flock( RES, 2 );
+	    print RES $string;
+	    close( RES );
+	    flock( RES, 8 );
+    }
+} 
+
+# create an ldif file from ldap results on schema attributes
+sub CreateLDIFTwo
+{
+    @array = shift; my $string = ''; my $name = ''; my $tmpName = '';
+    for my $x ( 0 .. $#array ) {
+    	for my $y ( 0 .. $#{ $array[$x] } ) {
+	     # fix for username shit
+	     if( $array[$x][$y] =~ /sAMAccountName=(.*)/i ) {
+		     $name = $1;
+	     }
+	    }
+    }
+    # ensure we have something to fix in AD
+    if( ( defined( $name ) ) && ( $name ne "" ) ) {
+    	for my $x ( 0 .. $#array ) {
+	     for my $y ( 0 .. $#{ $array[$x] } ) {
+		     if( $array[$x][$y] ne '' ) {
+		      if( $array[$x][$y] =~ /dn=CN=(.*)(,CN=.*)/i ) {
+			      $string .= "dn: CN=$1$2\n"; my $tmpName = $1; my $dn = $string;
+			      $string .= "changetype: modrdn\n";
+			      $string .= "newrdn: CN=$name\n";
+			      $string .= "deleteoldrdn: 1\n";
+		      }
+		     }
+	     }
+	    }
+    }
+
+    # make sure its not empty before creating ldif file
+    if( ( $string ne "" ) && ( $name ne "" ) ) {
+    	open( RES, ">$dir/modify-dn-$date-$name.ldif" ) || die "ERROR: File could not be opened - $dir/modify-dn-$date-$name.ldif\n";
+	    flock( RES, 2 );
+	    print RES $string;
+	    close( RES );
+	    flock( RES, 8 );
+    }
+} 
+
+# apply defaults if some attributes are missing
+sub CheckAttribs( $string, $name )
+{
+    $string = shift; $name = shift;
+    if( $string !~ /msSFUName:/ ) { $string .= "replace: msSFUName\nmsSFUName: $name\n-\n"; }
+    if( $string !~ /unixHomeDirectory:/ ) { $string .= "replace: unixHomeDirectory\nunixHomeDirectory: $homedir/$name\n-\n"; }
+    if( $string !~ /msSFUHomeDirectory:/ ) { $string .= "replace: msSFUHomeDirectory\nmsSFUHomeDirectory: $homedir/$name\n-\n"; }
+    if( $string !~ /uidNumber:/ ) { $string .= "replace: uidNumber\nuidNumber: " . $uid++ . "\n-\n"; }
+    if( $string !~ /gidNumber:/ ) { $string .= "replace: gidNumber\ngidNumber: " . $gid . "\n-\n"; }
+    if( $string !~ /loginShell:/ ) { $string .= "replace: loginShell\nloginShell: $shell\n"; }
+    return $string;
+}
+
+# parse our results from ldap
+sub ParseResultsLDAP
+{
+    # open our temp file
+    open( RES, "$dir/ldap-lookup-$date.log" ) || die "ERROR: File could not be opened - $dir/ldap-lookup-$date.log\n";
+    flock( RES, 2 );
+    # initialize a new hash for results
+    my $iznt = 0; my @schemaAttribs = ''; my %userDataDetails = (); my @data = '';
+    # begin looping over results
+    my( @lines ) = <RES>;
+    foreach my $line ( @lines ) {
+    	chomp( $line );
+	    # get our users into an array
+	    if( $line =~ /^(cn)\:\s(.*)$/i ) {
+	     push( @data, $2 );
+	    }
+    }
+    # clean it up
+    close( RES );
+    flock( RES, 8 );
+    unlink( "$dir/ldap-lookup-$date.log" );
+
+    return @data;
+}
+
+# parse our winbind results and grab the invalids
+sub ParseResultsWBINFO
+{
+    # open our temp file
+    open( RES, "$dir/wbinfo-lookup-$date.log" ) || die "ERROR: File could not be opened - $dir/wbinfo-lookup-$date.log\n";
+    flock( RES, 2 );
+    # initialize a new hash for results
+    my @userData = '';
+    # begin looping over results
+    while( my $line = <RES> ) {
+    	# look for our common name attribute
+    	if( $line =~ /Could\snot\sget\sinfo\sfor\suser\s(.*)/i ) { push( @userData, $1 ); }
+	    if( defined( $verbose ) ) {
+	     print "\tERROR: " . $line . "\n";
+	    }
+    }
+    # clean it up
+    close( RES );
+    flock( RES, 8 );
+    unlink( "$dir/wbinfo-lookup-$date.log" );
+
+    return @userData;
+}
+
+# attempt lookup of users using winbind
+sub GetWBInfo( $user, $date )
+{
+    $user = shift;
+    # grab ident of user data
+    my $cmd = "wbinfo -i $user 2>> $dir/wbinfo-lookup-$date.log";
+    my @results = `$cmd`;
+    if( defined( $verbose ) ) {
+    	print "CMD: " . $cmd . "\n";
+    }
+    return @results;
+}
+
+# remove duplicate array values
+sub RemDups
+{
+    my %hash = map { $_ => 1 } @_;
+    my @unique = keys %hash;
+    return @unique;
+}
+
+# main application
+sub MainSub( $domain, $user, $pass, $ou, $obj, $date )
+{
+    # define our vars
+    my ( @wbInfo,
+         @userAttrib,
+	        @invWBInfo,
+	        @cnFix,
+         @cnFixRes ) = '';
+
+    my $uname = $user;
+
+    # create our directory data
+    &CreateDir;
+
+    # perform our ldap query
+    &GetLDAPQuery( \$domain, \$user, \$pass, \$ou, \$obj, \$date );
+
+    # parse the results
+    @userAttrib = &ParseResultsLDAP;
+
+    # ensure no duplicates are in results
+    @userAttrib = &RemDups( @userAttrib );
+
+    # ensure we found something
+    if( $#userAttrib == 0 ) {
+	    print "\tERROR: Could not find any records... exiting\n";
+	    exit;
+    }
+
+    # give a count to our user
+    print "\tFound: '$#userAttrib' '$obj' records in '$ou'\n";
+
+    # Now get our invalid accounts
+    for( my $i = 0; $i <= $#userAttrib; $i++ ) {
+	    if( $userAttrib[$i] ne '' ) {
+	     push( @wbInfo, &GetWBInfo( $userAttrib[$i], $date ) );
+	    }
+    }
+
+    # Also provide fix for invalid CN, DN DistinguishedName attributes
+    for( my $j = 0; $j <= $#userAttrib; $j++ ) {
+	    if( $userAttrib[$j] ne '' ) {
+	     if( $userAttrib[$j] =~ /(\w+\s\w+)$/i ) {
+		     $tmpName = $1;
+		     push( @cnFix, $tmpName );
+		     &GetLDAPQueryCNDNAttribs( $domain, $uname, $pass, $ou, $obj, $date, $tmpName );
+	     }
+	    }
+    }
+
+    # We should have any invalid entries here
+    @invWBInfo = &ParseResultsWBINFO;
+
+    # print count of invalid records
+    my $a = $#invWBInfo + $#cnFix;
+    if( $a >= 1 ) {
+    	print "\tFound: '$a' '$obj' records that are not RFC2307 compliant\n";
+
+    	# loop over results and attempt to set the required attribs
+    	print "INVALID ACCOUNTS:\n";
+    	my $tmpName = ''; my @results = ''; my @userDetails = ''; my %resultHash = ();
+    	for( my $n = 0; $n <= $#invWBInfo; $n++ ) {
+	    if( ( defined( $invWBInfo[$n] ) ) && ( $invWBInfo[$n] ne '' ) ) {
+		    $tmpName = $invWBInfo[$n];
+		    print "\tCN=$tmpName\n";
+		    &GetLDAPQueryAttribs( $domain, $uname, $pass, $ou, $obj, $date, $tmpName );
+		    push( @userDetails, &ParseResultsLDAPAttribs( $tmpName ) );
+	    }
+	   }
+	
+   	# loop over results with strange cn, dn attribs
+	   for( my $m = 0; $m <= $#cnFix; $m++ ) {
+	    if( ( defined( $cnFix[$m] ) ) && ( $cnFix[$m] ne '' ) ) {
+		    print "\tCN=$cnFix[$m]\n";
+		    $tmpName = $cnFix[$m];
+		    if( $tmpName =~ /(\w+)\s(\w+)$/i ) {
+		     $tmpName = $1 . $2;
+		    }
+		    push( @userDetails, &ParseResultsLDAPAttribs( $tmpName ) );
+	    }
+	   }
+
+   	# clean it up a tad
+	   sort( @userDetails );
+
+   	# proceed to create an ldif from data
+	   for( my $x = 0; $x <= $#userDetails; $x++ ) {
+	    &CreateLDIFOne( $userDetails[$x] );
+	    &CreateLDIFTwo( $userDetails[$x] );
+	   }
+	
+   	# Lets finish it up
+	   print "PROCESSING:\n";
+	   &ProcessLDIF( $domain, $uname, $pass, $date );
+	
+	   # display log
+	   if( defined( $verbose ) ) {
+	    print "NON-POSIX FIX RESULTS:\n";
+	    open( RES, "$dir/ldif-results-$date.log" ) || die "ERROR: File could not be opened - $dir/ldif-results-$date.log\n";
+	    flock( RES, 2 );
+	    my( @lines ) = <RES>;
+	    foreach my $line ( @lines ) {
+		    chomp( $line );
+		    print "\t$line\n";
+	    }
+	    close( RES );
+	    flock( RES, 8 );
+	   }
+   } else {
+	   print "\tFound: '0' '$obj' record(s) that are not RFC2307 compliant\n";
+   }
+   unlink( "$dir/ldif-results-$date.log" );
+   `rm $dir/*`;
+}
+
+# main application
+sub MainSubEasy( $domain, $user, $pass, $nameOne, $container, $obj, $date )
+{
+    # define our vars
+    my ( @wbInfo,
+         @userAttrib,
+	 @invWBInfo,
+	 @cnFix,
+         @cnFixRes ) = '';
+
+    my $uname = $user;
+
+    #break up domain
+    my @d = split(/\./, $domain);
+    my $ou = '';
+    for( my $i = 0; $i <= $#d; $i++ ) {
+	$ou .= "DC=" . $d[$i] . ",";
+    }
+    $ou = substr($ou,0,-1);
+
+    # create our directory data
+    &CreateDir;
+
+    # perform our ldap query
+    &GetLDAPQueryEasy( \$domain, \$user, \$pass, \$nameOne, \$date );
+
+    # parse the results
+    @userAttrib = &ParseResultsLDAP;
+
+    # ensure no duplicates are in results
+    @userAttrib = &RemDups( @userAttrib );
+
+    # ensure we found something
+    if( $#userAttrib == 0 ) {
+	print "\tERROR: Could not find any records... exiting\n";
+	exit;
+    }
+
+    # give a count to our user
+    print "\tFound: '$#userAttrib' record(s) matching '$nameOne' in '$domain'\n";
+
+    # Now get our invalid accounts
+    for( my $i = 0; $i <= $#userAttrib; $i++ ) {
+	if( $userAttrib[$i] ne '' ) {
+	    push( @wbInfo, &GetWBInfo( $userAttrib[$i], $date ) );
+	}
+    }
+
+    # Also provide fix for invalid CN, DN DistinguishedName attributes
+    for( my $j = 0; $j <= $#userAttrib; $j++ ) {
+	if( $userAttrib[$j] ne '' ) {
+	    if( $userAttrib[$j] =~ /(\w+\s\w+)$/i ) {
+		$tmpName = $1;
+		push( @cnFix, $tmpName );
+		&GetLDAPQueryCNDNAttribsEasy( $domain, $uname, $pass, $nameOne, $ou, $obj, $date, $tmpName );
+	    }
+	}
+    }
+
+    # We should have any invalid entries here
+    @invWBInfo = &ParseResultsWBINFO;
+
+    # print count of invalid records
+    my $a = $#invWBInfo + $#cnFix;
+    if( $a >= 1 ) {
+	print "\tFound: '$a' '$obj' records that are not RFC2307 compliant\n";
+
+	# loop over results and attempt to set the required attribs
+	print "INVALID ACCOUNTS:\n";
+	my $tmpName = ''; my @results = ''; my @userDetails = ''; my %resultHash = ();
+	for( my $n = 0; $n <= $#invWBInfo; $n++ ) {
+	    if( ( defined( $invWBInfo[$n] ) ) && ( $invWBInfo[$n] ne '' ) ) {
+		$tmpName = $invWBInfo[$n];
+		print "\tCN=$tmpName\n";
+		&GetLDAPQueryAttribsEasy( $domain, $uname, $pass, $nameOne, $ou, $obj, $date, $tmpName );
+		push( @userDetails, &ParseResultsLDAPAttribs( $tmpName ) );
+	    }
+	}
+	
+	# loop over results with strange cn, dn attribs
+	for( my $m = 0; $m <= $#cnFix; $m++ ) {
+  if( ( defined( $cnFix[$m] ) ) && ( $cnFix[$m] ne '' ) ) {
+ 		print "\tCN=$cnFix[$m]\n";
+ 		$tmpName = $cnFix[$m];
+ 		if( $tmpName =~ /(\w+)\s(\w+)$/i ) {
+    $tmpName = $1 . $2;
+  	}
+		 push( @userDetails, &ParseResultsLDAPAttribs( $tmpName ) );
+   }
+	 }
+	
+	 # clean it up a tad
+	 sort(@userDetails);
+
+	 # proceed to create an ldif from data
+	 for( my $x = 0; $x <= $#userDetails; $x++ ) {
+	  &CreateLDIFOne( $userDetails[$x] );
+	  &CreateLDIFTwo( $userDetails[$x] );
+	 }
+	
+ 	# Lets finish it up
+	 print "PROCESSING:\n";
+	 &ProcessLDIF( $domain, $uname, $pass, $date );
+	
+	 # display log
+	 print "NON-POSIX FIX RESULTS:\n";
+	 open( RES, "$dir/ldif-results-$date.log" ) || die "ERROR: File could not be opened - $dir/ldif-results-$date.log\n";
+	 flock( RES, 2 );
+	 my( @lines ) = <RES>;
+	 foreach my $line ( @lines ) {
+	  chomp( $line );
+	  print "\t$line\n";
+	 }
+	 close( RES );
+	 flock( RES, 8 );
+ } else {
+	 print "\tFound: '0' '$obj' record(s) that are not RFC2307 compliant\n";
+ }
+ unlink( "$dir/ldif-results-$date.log" );
+ `rm $dir/*`;
+}
+
+# Our simple prompter
+sub PromptUser {
+    my($prompt, $default) = @_;
+    my $defaultValue = $default ? "[$default]" : "";
+    print "$prompt $defaultValue: ";
+    chomp(my $input = <STDIN>);
+    return $input ? $input : $default;
+}
+
+# Wizard wiz sub routine
+sub WizardWiz
+{
+    $domain = &PromptUser("Enter domain");
+    $user = &PromptUser("Enter username");
+    $pass = &PromptUser("Enter password");
+    $nameOne = &PromptUser("Enter login name of user");
+    $container = &PromptUser("Enter OU", "Users");
+    $obj = &PromptUser("Enter object", "USER");
+    &MainSubEasy( $domain, $user, $pass, $nameOne, $container, $obj, $date );
+}
+
+# menu system
+sub ShowSyntax
+{
+    print <<EOF;
+
+Winbind, Samba & Active Directory UID2SID mapping utility
+------------------------------------------------------------
+Queries Active directory for list of users and begins mapping of
+the UID, GID & SID information to ensure Active Directory 
+Authentication is working.
+
+Usage: ./UID2SID.pl --domain=[DOMAIN] 
+                    --user=[USERNAME] 
+                    --pass=[PASSWORD] 
+                    --ou=[DC=DOMAIN,DC=COM] 
+                    --obj=[USER|COMPUTER|GROUP]
+                    --verbose
+                    --help
+EOF
+exit;
+}
+

@@ -1,0 +1,56 @@
+Wizard example - Use this to test functionality first
+
+By utilizing the wizard functionality you can target specific accounts which may exhibit UID/GID to SID mapping errors during the authentication process.
+
+I strongly recoomend testing invalid accounts using this option prior to using it against a specified domain and/or OU container in your active directory.
+
+%> ./UID2SID.pl
+Enter domain : EXAMPLE.COM
+Enter username : username
+Enter password : password
+Enter login name of user : testaccount
+Enter OU [Users]: 
+Enter object [USER]: 
+Searching for 'testaccount', please wait...
+SEARCH RESULTS:
+	Found: '1' record(s) matching 'testaccount' in 'EXAMPLE.COM'
+	Found: '1' record(s) matching 'testaccount' that are not RFC2307 compliant
+INVALID ACCOUNTS:
+	CN=Test Account
+PROCESSING:
+	Importing: modify-zz-attribs-10.08.2009-testaccount.ldif
+	Importing: modify-dn-10.08.2009-testaccount.ldif
+
+Automated usage example
+
+** Use caution utilizing the automated solution. It will search every user object within a specified domain and/or container to search for UID/GID to SID mapping errors in accounts and dynamically create modified ldiff files then re-import them in your Active Directory to correct those errors found **
+
+%> ./UID2SID.pl --domain=DOMAIN.COM --user=USERNAME --pass=PASSWORD --ou="CN=Users,DC=DOMAIN,DC=COM" --obj=user
+Searching for 'user' in 'CN=Users,DC=domain,DC=com', please wait...
+        BIND DN: CN=username,CN=Users,DC=domain,DC=com
+        BASE DN: CN=Users,DC=domain,DC=com
+        Object Class: user
+SEARCH RESULTS:
+        Found: '44' 'user' records in 'CN=Users,DC=domain,DC=com'
+        Found: '6' 'user' records that are not RFC2307 compliant
+INVALID ACCOUNTS:
+        CN=Ron
+        CN=mclame
+        CN=Joni
+        CN=Tonga
+        CN=Caroljean
+        CN=Matt
+PROCESSING:
+        modify-dn-06.23.2008-MIrsik.ldif
+        modify-zz-attribs-06.23.2008-tongak.ldif
+        modify-dn-06.23.2008-mclame.ldif
+        modify-dn-06.23.2008-rhansen.ldif
+        modify-dn-06.23.2008-tongak.ldif
+        modify-dn-06.23.2008-jclayton.ldif
+        modify-dn-06.23.2008-chanson.ldif
+        modify-zz-attribs-06.23.2008-rhansen.ldif
+        modify-zz-attribs-06.23.2008-jclayton.ldif
+        modify-zz-attribs-06.23.2008-chanson.ldif
+        modify-zz-attribs-06.23.2008-MIrsik.ldif
+        modify-zz-attribs-06.23.2008-mclame.ldif
+
